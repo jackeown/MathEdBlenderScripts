@@ -2,20 +2,19 @@ import sys
 import time
 
 #NECESSARY CONFIGURATION!!!  ###################################################
-projectFolder = "/home/user/Desktop/videoMaking/myBlenderScripts/affineLinear"
-
-if projectFolder not in sys.path:
-    sys.path.append(projectFolder)
-
+projectPath = r"C:\Users\jam771\Desktop\blenderScripts\affineLinear"
 ################################################################################
 
+if projectPath not in sys.path:
+    sys.path.append(projectPath)
+    
 from helpers import *
 
 def main():
     # print(sys.path)
     make3dAxes()
 
-    points = np.random.uniform(-3,3,(100,3))
+    points = np.random.uniform(-3,3,(2,3))
     for point in points:
         makePoint(point,size=0.02)
         makeVector(point, tail=(0,0,0))
