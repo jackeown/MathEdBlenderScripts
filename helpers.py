@@ -4,6 +4,12 @@ import mathutils
 import config
 import collections
 
+# path = os.path.abspath(os.path.dirname(__file__))
+# if path not in sys.path:
+#     sys.path.append(path)
+
+from manimTexHelpers import TEMPLATE, tex_hash, tex_to_svg_file
+
 
 # Functions for compatability between blender versions
 
@@ -50,8 +56,27 @@ def move3dCursor(p = (0,0,0)):
     bpy.context.scene.cursor_location = p
     # bpy.context.space_data.cursor_location = p
 
+def cameraLookAt(camera, point):
+    point = mathutils.Vector(point)
+    loc_camera = camera.location
+
+    direction = point - loc_camera
+    # point the cameras '-Z' and use its 'Y' as up
+    rot_quat = direction.to_track_quat('-Z', 'Y')
+
+    # assume we're using euler rotation
+    camera.rotation_euler = rot_quat.to_euler()
+
+def cameraOrbit(camera, duration = 5, radius=40, height=3, revolutions=1, speed=3):
+    tick = speed/100
+    for theta in np.arange(0,2*np.pi*revolutions,tick):
+        camera.location = (radius*np.cos(theta), radius*np.sin(theta), height)
+        cameraLookAt(camera,(0,0,0))
+        bpy.ops.anim.keyframe_insert_menu(type='BUILTIN_KSI_LocRot')
+        bpy.context.scene.frame_current += 1
 
 def joinNameAndMovePivot(objects, name, pivot):
+    pivot = np.array(pivot)
     setActiveObject(objects[0])
     selectObjects(objects)
 
@@ -59,6 +84,7 @@ def joinNameAndMovePivot(objects, name, pivot):
     move3dCursor(pivot)
     bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
     bpy.context.object.name = name
+    return bpy.context.object
 
 def makeSimpleColorMaterial(color, colorName):
     colorMat = bpy.data.materials.new(colorName)
@@ -81,6 +107,9 @@ themeMaterials = {
     "primary": (1,1,0),
     "secondary": (0,1,1),
     "highlight": (1,1,1),
+    "red": (1,0,0),
+    "green": (0,1,0),
+    "blue": (0,0,1),
     "shadow": (0,0,0)
 }
 
@@ -120,7 +149,10 @@ def getObject(name, index=-1):
     names = [x.name for x in bpy.data.objects if getNamePrefix(x.name) == name]
     names = sorted(names, key=getNameIndex)
 
-    obj = None
+    if len(names) == 0:
+        print("Object '{}' not found!".format(name))
+        return None
+
     if index < 0:
         obj = bpy.data.objects[names[index]]
     else:
@@ -129,6 +161,25 @@ def getObject(name, index=-1):
                 obj = bpy.data.objects[n]
 
     return obj
+
+def getCollection(name, index=-1):
+    """Does the same thing as getObject, but for blender collections instead"""
+    names = [x.name for x in bpy.data.collections if getNamePrefix(x.name) == name]
+    names = sorted(names, key=getNameIndex)
+
+    if len(names) == 0:
+        print("Collection '{}' not found!".format(name))
+        return None
+
+    if index < 0:
+        obj = bpy.data.collections[names[index]]
+    else:
+        for n in names:
+            if getNameIndex(n) == index:
+                obj = bpy.data.collections[n]
+
+    return obj
+
 
 
 # Methods for making mathematical objects such as Lines, Planes, Axes, Vectors, Points
@@ -148,21 +199,6 @@ def makeVector(offset = np.sqrt([1/3,1/3,1/3]), withCone = True, thickness = 0.0
     unitOffset = offset/length
     head = tail+offset
     center = (head+tail)/2
-
-    # A cylinder is initialized vertically
-    # The cross-product can give axes to rotate around and arcsin will give angle
-    # to rotate by in order to align a newly created cylinder to our intended vector.
-    # rotationAxis = np.cross(np.array([0,0,1]), offset)
-    # rotationAngle = (np.pi/2) - np.arcsin(offset[2]/length)
-    # if np.sqrt(rotationAxis @ rotationAxis.T) < 1e-5 and offset[2] < 0:
-    #     rotationAxis = mathutils.Vector((0,1,0))
-    #     rotationAngle = np.pi
-    # else:
-    #     rotationAxis = mathutils.Vector(rotationAxis)
-
-    # # turn this specification of rotation into something blender can use
-    # rotationMatrix = mathutils.Matrix.Rotation(rotationAngle, 3, rotationAxis)
-    # rot = rotationMatrix.to_euler()
 
     rot = getRotationFromVector(offset)
 
@@ -194,10 +230,10 @@ def makeVector(offset = np.sqrt([1/3,1/3,1/3]), withCone = True, thickness = 0.0
 def makeLineSegment(offset = np.sqrt([1/3,1/3,1/3]), withCone = False, thickness = 0.05, tail=(0,0,0), material=themeMaterials["primary"]):
     return makeVector(offset = offset, withCone = withCone, thickness = thickness, tail=tail, material=material)
 
-def make3dAxes(thickness = 0.05, lengths=(16,16,16)):
-    red = makeSimpleColorMaterial((1,0,0), "red")
-    green = makeSimpleColorMaterial((0,1,0), "green")
-    blue = makeSimpleColorMaterial((0,0,1), "blue")
+def make3dAxes(thickness = 0.05, lengths=(16,16,16), withLabels = True):
+    red = themeMaterials["red"] #makeSimpleColorMaterial((1,0,0), "red")
+    green = themeMaterials["green"] #makeSimpleColorMaterial((0,1,0), "green")
+    blue = themeMaterials["blue"] #makeSimpleColorMaterial((0,0,1), "blue")
 
     xp = makeVector(offset = (8,0,0), material=red)
     xn = makeVector(offset = (-8,0,0), material=red)
@@ -208,7 +244,14 @@ def make3dAxes(thickness = 0.05, lengths=(16,16,16)):
     zp = makeVector(offset = (0,0,8), material=blue)
     zn = makeVector(offset = (0,0,-8), material=blue)
 
-    joinNameAndMovePivot([xp,xn,yp,yn,zp,zn], "Axes", (0,0,0))
+    stuffToJoin = [xp,xn,yp,yn,zp,zn]
+    if withLabels:
+        xlabel = makeTex("$x$-axis", location = (9,0,0), material=red)
+        ylabel = makeTex("$y$-axis", location = (0,9,0), material=green)
+        zlabel = makeTex("$z$-axis", location = (0,0,9), material=blue)
+        # stuffToJoin.extend([xlabel,ylabel,zlabel])
+
+    joinNameAndMovePivot(stuffToJoin, "Axes", (0,0,0))
 
 def makePoint(p, size=0.1, smooth = True, material=themeMaterials["primary"]):
     p = tuple(p)
@@ -228,3 +271,36 @@ def makePoint(p, size=0.1, smooth = True, material=themeMaterials["primary"]):
 
     setMaterial(bpy.context.object, material)
     return bpy.context.object
+
+
+
+
+# Methods for dealing with LaTeX (for math and other text)
+
+def makeTex(expression, location=(0,0,0), scale=2, trackCamera = True, material=themeMaterials["secondary"], thickness=0.3):
+    location = np.array(location)
+    svgPath = tex_to_svg_file(expression, TEMPLATE)
+    bpy.ops.import_curve.svg(filepath=svgPath)
+    collectionName = tex_hash(expression, TEMPLATE) + ".svg"
+    collection = getCollection(collectionName)
+
+    obj = joinNameAndMovePivot(collection.objects, expression, collection.objects[0].location)
+    bpy.ops.object.convert()
+
+    obj.scale *= (100 * scale)
+    obj.location = location
+
+    selectObjects([obj])
+    bpy.ops.object.editmode_toggle()
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.extrude_region_move(TRANSFORM_OT_translate={"value":(0,0,-thickness)})
+    bpy.ops.object.editmode_toggle()
+
+
+    if trackCamera:
+        bpy.ops.object.constraint_add(type='COPY_ROTATION')
+        bpy.context.object.constraints["Copy Rotation"].target = bpy.data.objects["Camera"]
+
+    setMaterial(obj,material)
+
+    return obj
